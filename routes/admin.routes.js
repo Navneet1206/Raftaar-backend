@@ -10,6 +10,39 @@ const captainModel = require('../models/captain.model');
 const { sendEmail } = require('../services/communication.service');
 const { sendMessageToSocketId } = require('../socket');
 
+// -------------------------------------------
+// Helper: HTML Email Template with Styling
+// -------------------------------------------
+const createEmailTemplate = (heading, messageBody) => {
+  return `
+    <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f2f2f2; }
+          .container { max-width: 600px; margin: 0 auto; background: #ffffff; padding: 20px; border: 1px solid #dddddd; }
+          .header { background: #007BFF; color: #ffffff; padding: 10px; text-align: center; }
+          .content { margin: 20px 0; font-size: 16px; color: #333333; line-height: 1.5; }
+          .footer { text-align: center; font-size: 12px; color: #888888; margin-top: 20px; }
+          a { color: #007BFF; text-decoration: none; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>${heading}</h2>
+          </div>
+          <div class="content">
+            ${messageBody}
+          </div>
+          <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} Your Company Name. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
 // ------------------------
 // Admin Authentication
 // ------------------------
@@ -50,7 +83,7 @@ router.get('/rides/pending', authMiddleware.authAdmin, async (req, res) => {
   }
 });
 
-// Update ride status (using findByIdAndUpdate to update only status fields)
+// Update ride status (update only status fields)
 router.post('/rides/:id/status', authMiddleware.authAdmin, async (req, res) => {
   try {
     const updateData = { status: req.body.status };
@@ -72,13 +105,17 @@ router.post('/rides/:id/status', authMiddleware.authAdmin, async (req, res) => {
     
     console.log("Updated ride:", ride);
     
+    // Send a styled HTML email to the user
     if (ride.user && ride.user.email) {
+      const messageBody = `
+        <p>Hello ${ride.user.fullname},</p>
+        <p>Your ride request status has been updated to <strong>${req.body.status.toUpperCase()}</strong>.</p>
+        ${req.body.status === 'rejected' ? `<p>Reason: ${req.body.reason}</p>` : ''}
+        <p>Thank you for choosing our service.</p>
+      `;
+      const htmlContent = createEmailTemplate('Ride Status Update', messageBody);
       try {
-        await sendEmail(
-          ride.user.email,
-          'Ride Status Update',
-          `Your ride request has been ${req.body.status}`
-        );
+        await sendEmail(ride.user.email, 'Ride Status Update', htmlContent);
       } catch (emailErr) {
         console.error("Error sending email:", emailErr);
       }
@@ -95,51 +132,63 @@ router.post('/rides/:id/status', authMiddleware.authAdmin, async (req, res) => {
 
 // ✅ Ride Assignment
 router.post('/rides/:id/assign', authMiddleware.authAdmin, async (req, res) => {
-    try {
-      const ride = await rideModel.findById(req.params.id).populate('user captain');
-      const captain = await captainModel.findById(req.body.captainId);
-      if (!captain) return res.status(404).json({ success: false, message: 'Captain not found' });
-  
-      // Assign the captain and update status to a valid enum value.
-      ride.captain = req.body.captainId;
-      // Use "accepted" (allowed in the ride enum) instead of "assigned"
-      ride.status = 'accepted';
-  
-      // If paymentType is missing, set it to a default value (adjust as needed)
-      if (!ride.paymentType) {
-        ride.paymentType = "cash";
-      }
-  
-      await ride.save();
-  
-      // Send email notifications if possible.
-      if (ride.user && ride.user.email) {
-        await sendEmail(
-          ride.user.email,
-          'Ride Assigned',
-          `Your ride has been assigned to Captain ${captain.fullname}`
-        );
-      }
-      if (captain.email) {
-        await sendEmail(
-          captain.email,
-          'New Ride Assignment',
-          `New ride assigned. Pickup - ${ride.pickup}, Destination - ${ride.destination}`
-        );
-      }
-  
-      // Notify the captain via socket (if available)
-      sendMessageToSocketId(captain.socketId, {
-        event: 'ride-assigned',
-        data: ride
-      });
-      
-      res.status(200).json({ success: true, ride });
-    } catch (err) {
-      console.error("Error in ride assignment:", err);
-      res.status(500).json({ success: false, message: err.message });
+  try {
+    const ride = await rideModel.findById(req.params.id).populate('user captain');
+    const captain = await captainModel.findById(req.body.captainId);
+    if (!captain) return res.status(404).json({ success: false, message: 'Captain not found' });
+
+    // Assign the captain and update status to "accepted"
+    ride.captain = req.body.captainId;
+    ride.status = 'accepted';
+
+    // If paymentType is missing, set it to a default value
+    if (!ride.paymentType) {
+      ride.paymentType = "cash";
     }
-  });
+
+    await ride.save();
+
+    // Send email notification to the user
+    if (ride.user && ride.user.email) {
+      const userMessage = `
+        <p>Hello ${ride.user.fullname},</p>
+        <p>Your ride has been assigned to Captain <strong>${captain.fullname}</strong>.</p>
+        <p>We will keep you updated with further details.</p>
+      `;
+      await sendEmail(
+        ride.user.email,
+        'Ride Assigned',
+        createEmailTemplate('Ride Assigned', userMessage)
+      );
+    }
+    // Send email notification to the captain
+    if (captain.email) {
+      const captainMessage = `
+        <p>Hello ${captain.fullname},</p>
+        <p>You have a new ride assignment.</p>
+        <p><strong>Pickup:</strong> ${ride.pickup}<br>
+           <strong>Destination:</strong> ${ride.destination}</p>
+        <p>Please review the details and proceed accordingly.</p>
+      `;
+      await sendEmail(
+        captain.email,
+        'New Ride Assignment',
+        createEmailTemplate('New Ride Assignment', captainMessage)
+      );
+    }
+
+    // Notify the captain via socket (if available)
+    sendMessageToSocketId(captain.socketId, {
+      event: 'ride-assigned',
+      data: ride
+    });
+    
+    res.status(200).json({ success: true, ride });
+  } catch (err) {
+    console.error("Error in ride assignment:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
   
 // End ride
 router.post('/rides/:id/end', authMiddleware.authAdmin, async (req, res) => {
@@ -150,11 +199,31 @@ router.post('/rides/:id/end', authMiddleware.authAdmin, async (req, res) => {
     ride.status = 'completed';
     await ride.save();
 
+    // Email to user
     if (ride.user && ride.user.email) {
-      await sendEmail(ride.user.email, 'Ride Completed', 'Your ride has been successfully completed.');
+      const userMessage = `
+        <p>Hello ${ride.user.fullname},</p>
+        <p>Your ride has been successfully completed.</p>
+        <p>Thank you for riding with us.</p>
+      `;
+      await sendEmail(
+        ride.user.email,
+        'Ride Completed',
+        createEmailTemplate('Ride Completed', userMessage)
+      );
     }
+    // Email to captain
     if (ride.captain && ride.captain.email) {
-      await sendEmail(ride.captain.email, 'Ride Completed', 'The ride you were assigned has been marked as completed.');
+      const captainMessage = `
+        <p>Hello ${ride.captain.fullname},</p>
+        <p>The ride you were assigned has been marked as completed.</p>
+        <p>Thank you for your service.</p>
+      `;
+      await sendEmail(
+        ride.captain.email,
+        'Ride Completed',
+        createEmailTemplate('Ride Completed', captainMessage)
+      );
     }
     res.status(200).json({ success: true, message: 'Ride ended successfully', ride });
   } catch (err) {
@@ -172,11 +241,31 @@ router.post('/rides/:id/cancel', authMiddleware.authAdmin, async (req, res) => {
     ride.cancellationReason = req.body.reason || 'Cancelled by admin';
     await ride.save();
 
+    // Email to user
     if (ride.user && ride.user.email) {
-      await sendEmail(ride.user.email, 'Ride Cancelled', 'Your ride has been cancelled.');
+      const userMessage = `
+        <p>Hello ${ride.user.fullname},</p>
+        <p>Your ride has been cancelled.</p>
+        <p>If you have any questions, please contact our support team.</p>
+      `;
+      await sendEmail(
+        ride.user.email,
+        'Ride Cancelled',
+        createEmailTemplate('Ride Cancelled', userMessage)
+      );
     }
+    // Email to captain
     if (ride.captain && ride.captain.email) {
-      await sendEmail(ride.captain.email, 'Ride Cancelled', 'The ride assigned to you has been cancelled.');
+      const captainMessage = `
+        <p>Hello ${ride.captain.fullname},</p>
+        <p>The ride assigned to you has been cancelled.</p>
+        <p>Please standby for further assignments.</p>
+      `;
+      await sendEmail(
+        ride.captain.email,
+        'Ride Cancelled',
+        createEmailTemplate('Ride Cancelled', captainMessage)
+      );
     }
     res.status(200).json({ success: true, message: 'Ride cancelled successfully', ride });
   } catch (err) {
