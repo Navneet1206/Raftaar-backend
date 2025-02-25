@@ -1,5 +1,5 @@
 const nodemailer = require('nodemailer');
-const twilio = require('twilio');
+const axios = require('axios');
 
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
@@ -10,8 +10,6 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS,
   },
 });
-
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // Helper: Create a styled HTML email template
 const createEmailTemplate = (heading, messageBody) => {
@@ -63,21 +61,26 @@ module.exports.sendEmailOTP = async (email, otp) => {
   await transporter.sendMail(mailOptions);
 };
 
-// Send OTP via SMS with clear message formatting
+// Send OTP via SMS using 2Factor API
 module.exports.sendSMSOTP = async (mobileNumber, otp) => {
-  // Ensure mobile number starts with +91
   if (!mobileNumber.startsWith('+91')) {
     mobileNumber = `+91${mobileNumber}`;
   }
 
-  await twilioClient.messages.create({
-    body: `Your OTP for signup is: ${otp}. Please use this OTP to complete your registration.`,
-    from: process.env.TWILIO_PHONE_NUMBER,
-    to: mobileNumber,
-  });
+  try {
+    const url = `https://2factor.in/API/V1/${process.env.TWO_FACTOR_API_KEY}/SMS/${mobileNumber}/${otp}/Your%20OTP%20for%20Signup`;
+    const response = await axios.get(url);
+    console.log('2Factor response:', response.data);
+    if (response.data.Status !== 'Success') {
+      throw new Error('2Factor SMS send failed');
+    }
+  } catch (error) {
+    console.error('Error sending SMS via 2Factor:', error);
+    throw new Error('Failed to send SMS OTP');
+  }
 };
 
-// Send a generic email using HTML content and styled template if needed
+// Send a generic email using HTML content and styled template
 module.exports.sendEmail = async (to, subject, html) => {
   const mailOptions = {
     from: process.env.EMAIL_USER,
