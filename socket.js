@@ -8,7 +8,7 @@ let io;
 function initializeSocket(server) {
     io = socketIo(server, {
         cors: {
-            origin: process.env.FRONTEND_URL || "http://localhost:5173", // Use .env variable
+            origin: process.env.FRONTEND_URL|| "https://raftaar-frontend-dun.vercel.app" || "http://localhost:5173", // Use .env variable
             methods: ["GET", "POST"],
         },
     });
