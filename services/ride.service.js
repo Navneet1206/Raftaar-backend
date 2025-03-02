@@ -2,48 +2,73 @@ const rideModel = require('../models/ride.model');
 const mapService = require('./maps.service');
 const crypto = require('crypto');
 
+// async function getFare(pickup, destination) {
+//   if (!pickup || !destination) {
+//     throw new Error('Pickup and destination are required');
+//   }
+
+//   try {
+//     const distanceTime = await mapService.getDistanceTime(pickup, destination);
+    
+//     if (!distanceTime || typeof distanceTime.distance !== 'number' || typeof distanceTime.duration !== 'number') {
+//       throw new Error('Invalid response from map service');
+//     }
+    
+//     console.log("Distance & Time Data:", distanceTime); // Debugging
+
+//     const baseFare = { 
+//       '4-seater hatchback': 30, 
+//       '4-seater sedan': 35, 
+//       '7-seater SUV': 50, 
+//       '7-seater MUV': 55 
+//     };
+//     const perKmRate = { 
+//       '4-seater hatchback': 10, 
+//       '4-seater sedan': 12, 
+//       '7-seater SUV': 15, 
+//       '7-seater MUV': 18 
+//     };
+//     const perMinuteRate = { 
+//       '4-seater hatchback': 2, 
+//       '4-seater sedan': 2.5, 
+//       '7-seater SUV': 3, 
+//       '7-seater MUV': 3.5 
+//     };
+
+//     const fare = {};
+//     for (const type in baseFare) {
+//       fare[type] = Math.round(
+//         baseFare[type] +
+//         ((distanceTime.distance / 1000) * perKmRate[type]) +
+//         ((distanceTime.duration / 60) * perMinuteRate[type])
+//       );
+//     }
+//     console.log("Calculated Fare:", fare); // Debugging
+//     return fare;
+//   } catch (error) {
+//     console.error('Error in fare calculation:', error.message);
+//     throw new Error('Fare calculation failed');
+//   }
+// }
 async function getFare(pickup, destination) {
   if (!pickup || !destination) {
     throw new Error('Pickup and destination are required');
   }
 
   try {
+    // Optionally, you can still call the map service to log distance & time
+    // but we'll ignore its values for fare calculation.
     const distanceTime = await mapService.getDistanceTime(pickup, destination);
-    
-    if (!distanceTime || !distanceTime.distance || !distanceTime.duration) {
-      throw new Error('Invalid response from GoMaps API');
-    }
-    
-    console.log("Distance & Time Data:", distanceTime); // Debugging
+    console.log("Distance & Time Data (ignored):", distanceTime);
 
-    const baseFare = { 
-      '4-seater hatchback': 30, 
-      '4-seater sedan': 35, 
-      '7-seater SUV': 50, 
-      '7-seater MUV': 55 
+    // Return a fixed fare of 1 rupee for all vehicle types
+    const fare = {
+      '4-seater hatchback': 1,
+      '4-seater sedan': 1,
+      '7-seater SUV': 1,
+      '7-seater MUV': 1
     };
-    const perKmRate = { 
-      '4-seater hatchback': 10, 
-      '4-seater sedan': 12, 
-      '7-seater SUV': 15, 
-      '7-seater MUV': 18 
-    };
-    const perMinuteRate = { 
-      '4-seater hatchback': 2, 
-      '4-seater sedan': 2.5, 
-      '7-seater SUV': 3, 
-      '7-seater MUV': 3.5 
-    };
-
-    const fare = {};
-    for (const type in baseFare) {
-      fare[type] = Math.round(
-        baseFare[type] +
-        ((distanceTime.distance.value / 1000) * perKmRate[type]) +
-        ((distanceTime.duration.value / 60) * perMinuteRate[type])
-      );
-    }
-    console.log("Calculated Fare:", fare); // Debugging
+    console.log("Calculated Fare:", fare);
     return fare;
   } catch (error) {
     console.error('Error in fare calculation:', error.message);
