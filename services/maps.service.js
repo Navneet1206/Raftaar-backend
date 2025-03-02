@@ -8,52 +8,79 @@ let axiosOptions = {
   timeout: 15000, // 15-second timeout
 };
 
-// If running in Node (i.e. no window), force IPv4 and set a default User-Agent.
 if (typeof window === 'undefined') {
   axiosOptions.httpsAgent = new https.Agent({ family: 4 });
   axiosOptions.headers = {
-    'User-Agent': 'Mozilla/5.0'
+    'User-Agent': 'Mozilla/5.0 (compatible; YourAppName/1.0; +http://yourdomain.com/info)'
   };
 }
 
 const axiosInstance = axios.create(axiosOptions);
 
-module.exports.getAddressCoordinate = async (input) => {
-  const apiKey = process.env.GOMAPPRO_API_KEY;
-  if (!apiKey) {
-    throw new Error('GOMAPPRO_API_KEY is not set in the environment');
+// Helper function to geocode an address using Nominatim
+async function geocodeAddress(address) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`;
+  const response = await axiosInstance.get(url);
+  if (response.data && response.data.length > 0) {
+    const result = response.data[0];
+    return {
+      lat: parseFloat(result.lat),
+      lng: parseFloat(result.lon),
+      formatted_address: result.display_name
+    };
+  } else {
+    throw new Error('Unable to fetch coordinates for the address');
   }
+}
 
+// Helper function to reverse geocode using Nominatim
+async function reverseGeocode(lat, lng) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+  const response = await axiosInstance.get(url);
+  if (response.data && response.data.display_name) {
+    return {
+      lat: parseFloat(lat),
+      lng: parseFloat(lng),
+      formatted_address: response.data.display_name
+    };
+  } else {
+    throw new Error('Unable to fetch address for the given coordinates');
+  }
+}
+
+module.exports.getAddressCoordinate = async (input) => {
   const trimmedInput = input.trim();
-  let url = '';
 
   // Check if the input is a lat,lng pair (reverse geocoding) or an address.
   if (/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(trimmedInput)) {
-    // Reverse geocoding
-    url = `https://maps.gomaps.pro/maps/api/geocode/json?latlng=${encodeURIComponent(trimmedInput)}&key=${apiKey}`;
-  } else {
-    // Forward geocoding
-    url = `https://maps.gomaps.pro/maps/api/geocode/json?address=${encodeURIComponent(trimmedInput)}&key=${apiKey}`;
-  }
-
-  console.log('[maps.service] Request URL:', url);
-
-  try {
-    const response = await axiosInstance.get(url);
-    console.log('[maps.service] API response:', response.data);
-    if (response.data.status === 'OK' && response.data.results.length > 0) {
-      const result = response.data.results[0];
+    // Reverse geocoding: split the input into lat and lng.
+    const [lat, lng] = trimmedInput.split(',').map(Number);
+    console.log('[maps.service] Reverse geocoding using Nominatim');
+    try {
+      const result = await reverseGeocode(lat, lng);
       return {
-        ltd: result.geometry.location.lat,
-        lng: result.geometry.location.lng,
+        ltd: result.lat,
+        lng: result.lng,
         formatted_address: result.formatted_address,
       };
-    } else {
-      throw new Error(response.data.error_message || 'Unable to fetch coordinates');
+    } catch (error) {
+      console.error('[maps.service] Error:', error.message);
+      throw error;
     }
-  } catch (error) {
-    console.error('[maps.service] Error:', error.message);
-    throw error;
+  } else {
+    // Forward geocoding: treat input as address.
+    console.log('[maps.service] Forward geocoding using Nominatim');
+    try {
+      const result = await geocodeAddress(trimmedInput);
+      return {
+        ltd: result.lat,
+        lng: result.lng,
+        formatted_address: result.formatted_address,
+      };
+    } catch (error) {
+      console.error('[maps.service] Error:', error.message);
+      throw error;
+    }
   }
 };
 
@@ -62,16 +89,37 @@ module.exports.getDistanceTime = async (origin, destination) => {
     throw new Error('Origin and destination are required');
   }
 
-  const apiKey = process.env.GOMAPPRO_API_KEY;
-  const url = `https://maps.gomaps.pro/maps/api/distancematrix/json?origins=${encodeURIComponent(origin)}&destinations=${encodeURIComponent(destination)}&key=${apiKey}`;
+  let originCoords, destinationCoords;
+
+  // Determine if origin is coordinates or address.
+  if (/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(origin.trim())) {
+    const [lat, lng] = origin.trim().split(',').map(Number);
+    originCoords = { lat, lng };
+  } else {
+    originCoords = await geocodeAddress(origin);
+  }
+
+  // Determine if destination is coordinates or address.
+  if (/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(destination.trim())) {
+    const [lat, lng] = destination.trim().split(',').map(Number);
+    destinationCoords = { lat, lng };
+  } else {
+    destinationCoords = await geocodeAddress(destination);
+  }
+
+  // Use OSRM API for routing.
+  const osrmUrl = `http://router.project-osrm.org/route/v1/driving/${originCoords.lng},${originCoords.lat};${destinationCoords.lng},${destinationCoords.lat}?overview=false`;
+  console.log('[maps.service] Request OSRM URL:', osrmUrl);
 
   try {
-    const response = await axiosInstance.get(url);
-    if (response.data.status === 'OK') {
-      if (response.data.rows[0].elements[0].status === 'ZERO_RESULTS') {
-        throw new Error('No routes found');
-      }
-      return response.data.rows[0].elements[0];
+    const response = await axiosInstance.get(osrmUrl);
+    if (response.data && response.data.code === 'Ok' && response.data.routes.length > 0) {
+      const route = response.data.routes[0];
+      // Return distance (in meters) and duration (in seconds)
+      return {
+        distance: route.distance,
+        duration: route.duration
+      };
     } else {
       throw new Error('Unable to fetch distance and time');
     }
@@ -86,13 +134,16 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
     throw new Error('Input is required');
   }
 
-  const apiKey = process.env.GOMAPPRO_API_KEY;
-  const url = `https://maps.gomaps.pro/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${apiKey}`;
+  // Nominatim does not have a dedicated autocomplete API.
+  // Using the search endpoint to simulate autocomplete suggestions.
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(input)}`;
+  console.log('[maps.service] Request autocomplete URL:', url);
 
   try {
     const response = await axiosInstance.get(url);
-    if (response.data.status === 'OK') {
-      return response.data.predictions.map(prediction => prediction.description);
+    if (response.data) {
+      // Map the results to their display_name for suggestions.
+      return response.data.map(result => result.display_name);
     } else {
       throw new Error('Unable to fetch suggestions');
     }
@@ -109,9 +160,9 @@ module.exports.getCaptainsInTheRadius = async (lat, lng, radius) => {
         $near: {
           $geometry: {
             type: 'Point',
-            coordinates: [lng, lat], // GeoJSON format: [longitude, latitude]
+            coordinates: [lng, lat],
           },
-          $maxDistance: radius * 1000, // Convert radius (in km) to meters
+          $maxDistance: radius * 1000, // Convert km to meters
         },
       },
     });
