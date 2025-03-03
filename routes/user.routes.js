@@ -56,4 +56,13 @@ router.get("/profile", authMiddleware.authUser, userController.getUserProfile);
 
 router.get("/logout", userController.logoutUser);
 
+router.post(
+  "/resend-otp",
+  [
+    body("email").isEmail().withMessage("Invalid Email"),
+    body("mobileNumber").isLength({ min: 10 }).withMessage("Invalid Mobile Number"),
+  ],
+  userController.resendOTP
+);
+
 module.exports = router;

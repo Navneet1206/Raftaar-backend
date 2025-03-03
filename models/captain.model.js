@@ -1,3 +1,4 @@
+// Backend/models/captain.model.js
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -53,7 +54,7 @@ const captainSchema = new mongoose.Schema({
     vehicleType: {
       type: String,
       required: true,
-      enum: ['4-seater hatchback', '4-seater sedan', '7-seater SUV', '7-seater MUV'], // Updated
+      enum: ['4-seater hatchback', '4-seater sedan', '7-seater SUV', '7-seater MUV'],
     },
   },
   profilePhoto: {
@@ -93,6 +94,10 @@ const captainSchema = new mongoose.Schema({
   mobileVerified: {
     type: Boolean,
     default: false,
+  },
+  lastOtpSent: {
+    type: Date,
+    default: null, // Tracks the last time an OTP was sent for cooldown
   },
 });
 

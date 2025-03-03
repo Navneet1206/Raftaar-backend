@@ -32,7 +32,7 @@ const userSchema = new mongoose.Schema({
   },
   mobileNumber: {
     type: String,
-    required: true, 
+    required: true,
     unique: true,
   },
   socketId: {
@@ -53,6 +53,10 @@ const userSchema = new mongoose.Schema({
   mobileVerified: {
     type: Boolean,
     default: false,
+  },
+  lastOtpSent: {
+    type: Date,
+    default: null, // Tracks the last time an OTP was sent for cooldown
   },
 });
 

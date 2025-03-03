@@ -21,44 +21,87 @@ module.exports.registerUser = async (req, res, next) => {
     mobileNumber,
   });
 
-  const hashedPassword = await userModel.hashPassword(password);
-
-  const emailOTP = generateOTP();
-  const mobileOTP = generateOTP();
-
-  console.log("Generated Mobile OTP:", mobileOTP);
-  console.log("Generated EMAIL OTP:", emailOTP);
-
   let formattedMobileNumber = mobileNumber.trim();
   if (!formattedMobileNumber.startsWith("+91")) {
     formattedMobileNumber = `+91${formattedMobileNumber}`;
   }
 
   try {
-    const user = await userService.createUser({
-      firstname: fullname.firstname,
-      lastname: fullname.lastname,
-      email,
-      password: hashedPassword,
-      profilePhoto,
-      mobileNumber: formattedMobileNumber,
-      emailOTP,
-      mobileOTP,
-    });
+    // Check if email or mobile already exists
+    const existingUserByEmail = await userModel.findOne({ email });
+    const existingUserByMobile = await userModel.findOne({ mobileNumber: formattedMobileNumber });
 
-    await sendEmailOTP(email, emailOTP);
-    await sendSMSOTP(formattedMobileNumber, mobileOTP);
+    let user;
+
+    if (existingUserByEmail || existingUserByMobile) {
+      // If both email and mobile are fully verified, reject duplicate signup
+      if (existingUserByEmail?.emailVerified && existingUserByEmail?.mobileVerified) {
+        return res.status(400).json({ message: "Account with this email is already fully verified." });
+      }
+      if (existingUserByMobile?.emailVerified && existingUserByMobile?.mobileVerified) {
+        return res.status(400).json({ message: "Account with this mobile number is already fully verified." });
+      }
+
+      // Handle partial verification or mismatched data
+      user = existingUserByEmail || existingUserByMobile;
+
+      // Update unverified fields if they differ
+      if (!user.emailVerified && email !== user.email) {
+        user.email = email;
+      }
+      if (!user.mobileVerified && formattedMobileNumber !== user.mobileNumber) {
+        user.mobileNumber = formattedMobileNumber;
+      }
+
+      // Generate new OTPs
+      const emailOTP = generateOTP();
+      const mobileOTP = generateOTP();
+      console.log("Generated Mobile OTP:", mobileOTP);
+      console.log("Generated EMAIL OTP:", emailOTP);
+
+      user.emailOTP = emailOTP;
+      user.mobileOTP = mobileOTP;
+      user.password = await userModel.hashPassword(password); // Update password if changed
+      user.fullname = { firstname: fullname.firstname, lastname: fullname.lastname };
+      user.profilePhoto = profilePhoto;
+      user.lastOtpSent = new Date(); // Track OTP send time
+
+      await user.save();
+    } else {
+      // New user signup
+      const hashedPassword = await userModel.hashPassword(password);
+      const emailOTP = generateOTP();
+      const mobileOTP = generateOTP();
+      console.log("Generated Mobile OTP:", mobileOTP);
+      console.log("Generated EMAIL OTP:", emailOTP);
+
+      user = await userService.createUser({
+        firstname: fullname.firstname,
+        lastname: fullname.lastname,
+        email,
+        password: hashedPassword,
+        profilePhoto,
+        mobileNumber: formattedMobileNumber,
+        emailOTP,
+        mobileOTP,
+        lastOtpSent: new Date(), // Track OTP send time
+      });
+    }
+
+    // Send OTPs
+    await sendEmailOTP(user.email, user.emailOTP);
+    await sendSMSOTP(user.mobileNumber, user.mobileOTP);
 
     console.log("OTP sent to email and mobile number");
 
     res.status(201).json({
       message: "OTP sent to email and mobile number",
-      user: { email, mobileNumber: formattedMobileNumber },
+      user: { email: user.email, mobileNumber: user.mobileNumber },
     });
   } catch (error) {
     if (error.code === 11000) {
       console.log("Duplicate key error:", error);
-      let field = Object.keys(error.keyPattern)[0]; // Identify which field caused the error
+      let field = Object.keys(error.keyPattern)[0];
       return res.status(400).json({
         message: `Duplicate value found for ${field}. Please use a different ${field}.`,
       });
@@ -67,7 +110,6 @@ module.exports.registerUser = async (req, res, next) => {
     res.status(500).json({ message: "Internal server error" });
   }
 };
-
 
 module.exports.verifyEmailOTP = async (req, res, next) => {
   const { email, otp } = req.body;
@@ -140,7 +182,6 @@ module.exports.verifyMobileOTP = async (req, res, next) => {
   }
 };
 
-
 module.exports.loginUser = async (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -162,7 +203,20 @@ module.exports.loginUser = async (req, res, next) => {
   }
 
   if (!user.emailVerified || !user.mobileVerified) {
-    return res.status(401).json({ message: "Please verify your email and mobile number" });
+    // Trigger verification process
+    user.emailOTP = !user.emailVerified ? generateOTP() : user.emailOTP;
+    user.mobileOTP = !user.mobileVerified ? generateOTP() : user.mobileOTP;
+    user.lastOtpSent = new Date();
+
+    if (!user.emailVerified) await sendEmailOTP(user.email, user.emailOTP);
+    if (!user.mobileVerified) await sendSMSOTP(user.mobileNumber, user.mobileOTP);
+
+    await user.save();
+
+    return res.status(401).json({
+      message: "Please verify your email and/or mobile number",
+      user: { email: user.email, mobileNumber: user.mobileNumber },
+    });
   }
 
   const token = user.generateAuthToken();
@@ -195,9 +249,64 @@ module.exports.logoutUser = async (req, res, next) => {
 
   const token = req.cookies.token || req.headers.authorization?.split(" ")[1];
   if (token) {
-      await blackListTokenModel.create({ token });
+    await blackListTokenModel.create({ token });
   }
 
   console.log("User logged out successfully");
   return res.status(200).json({ message: "Logged out" });
+};
+
+// Resend OTP endpoint
+module.exports.resendOTP = async (req, res) => {
+  const { email, mobileNumber } = req.body;
+
+  if (!email || !mobileNumber) {
+    return res.status(400).json({ message: "Email and mobile number are required" });
+  }
+
+  let formattedMobileNumber = mobileNumber.trim();
+  if (!formattedMobileNumber.startsWith("+91")) {
+    formattedMobileNumber = `+91${formattedMobileNumber}`;
+  }
+
+  try {
+    const user = await userModel.findOne({
+      $or: [{ email }, { mobileNumber: formattedMobileNumber }],
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.emailVerified && user.mobileVerified) {
+      return res.status(400).json({ message: "Account is already fully verified" });
+    }
+
+    // Check cooldown (2 minutes = 120 seconds)
+    const lastSent = user.lastOtpSent || new Date(0);
+    const timeDiff = (new Date() - new Date(lastSent)) / 1000;
+    if (timeDiff < 120) {
+      return res.status(429).json({
+        message: `Please wait ${Math.ceil(120 - timeDiff)} seconds before requesting a new OTP`,
+      });
+    }
+
+    // Generate and send new OTPs
+    if (!user.emailVerified) {
+      user.emailOTP = generateOTP();
+      await sendEmailOTP(user.email, user.emailOTP);
+    }
+    if (!user.mobileVerified) {
+      user.mobileOTP = generateOTP();
+      await sendSMSOTP(user.mobileNumber, user.mobileOTP);
+    }
+
+    user.lastOtpSent = new Date();
+    await user.save();
+
+    res.status(200).json({ message: "OTP resent to email and/or mobile number" });
+  } catch (error) {
+    console.error("Error resending OTP:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
 };

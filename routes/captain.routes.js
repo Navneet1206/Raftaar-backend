@@ -5,7 +5,6 @@ const captainController = require("../controllers/captain.controller");
 const upload = require("../utils/multer.config"); // Use the custom multer config
 const authMiddleware = require("../middlewares/auth.middleware");
 
-
 router.post(
   "/register",
   upload.single("profilePhoto"), // Use the custom file validation
@@ -26,8 +25,8 @@ router.post(
     body("vehicle.capacity")
       .isInt({ min: 1 })
       .withMessage("Capacity must be at least 1"),
-      body("vehicle.vehicleType")
-      .isIn(["4-seater hatchback", "4-seater sedan", "7-seater SUV", "7-seater MUV"]) 
+    body("vehicle.vehicleType")
+      .isIn(["4-seater hatchback", "4-seater sedan", "7-seater SUV", "7-seater MUV"])
       .withMessage("Invalid vehicle type"),
     body("mobileNumber")
       .isLength({ min: 10 })
@@ -70,9 +69,21 @@ router.post(
   captainController.loginCaptain
 );
 
-router.get('/profile', authMiddleware.authCaptain, captainController.getCaptainProfile);
-
+router.get('/profile', (req, res, next) => {
+  console.log('Route - /captains/profile invoked');
+  next();
+}, authMiddleware.authCaptain, captainController.getCaptainProfile);
 router.get("/logout", authMiddleware.authCaptain, captainController.logoutCaptain);
 
 // router.get("/dashboard/:captainId", captainController.getCaptainDashboard);
+
+router.post(
+  "/resend-otp",
+  [
+    body("email").isEmail().withMessage("Invalid Email"),
+    body("mobileNumber").isLength({ min: 10 }).withMessage("Invalid Mobile Number"),
+  ],
+  captainController.resendOTP
+);
+
 module.exports = router;

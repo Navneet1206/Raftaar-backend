@@ -5,7 +5,7 @@ require('dotenv').config();
 
 // Set up Axios options with a 15-second timeout.
 let axiosOptions = {
-  timeout: 15000, // 15-second timeout
+  timeout: 30000, // 30-second timeout
 };
 
 if (typeof window === 'undefined') {
